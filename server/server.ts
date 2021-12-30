@@ -7,28 +7,34 @@ import Koa from "koa";
 import next from "next";
 import Router from "koa-router";
 
+type ActiveShopifyShops = {
+  [key: string]: string;
+};
+
 dotenv.config();
-const port = parseInt(process.env.PORT, 10) || 8081;
+const port = parseInt(process.env.PORT as string, 10) || 8081;
 const dev = process.env.NODE_ENV !== "production";
 const app = next({
   dev,
 });
 const handle = app.getRequestHandler();
 
-Shopify.Context.initialize({
-  API_KEY: process.env.SHOPIFY_API_KEY,
-  API_SECRET_KEY: process.env.SHOPIFY_API_SECRET,
-  SCOPES: process.env.SCOPES.split(","),
-  HOST_NAME: process.env.HOST.replace(/https:\/\/|\/$/g, ""),
-  API_VERSION: ApiVersion.October20,
-  IS_EMBEDDED_APP: true,
-  // This should be replaced with your preferred storage strategy
-  SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
-});
+if (process.env?.HOST && process.env?.SCOPES) {
+  Shopify.Context.initialize({
+    API_KEY: process.env.SHOPIFY_API_KEY!,
+    API_SECRET_KEY: process.env.SHOPIFY_API_SECRET!,
+    SCOPES: process.env.SCOPES.split(","),
+    HOST_NAME: process.env.HOST.replace(/https:\/\/|\/$/g, ""),
+    API_VERSION: ApiVersion.October20,
+    IS_EMBEDDED_APP: true,
+    // This should be replaced with your preferred storage strategy
+    SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
+  });
+}
 
 // Storing the currently active shops in memory will force them to re-login when your server restarts. You should
 // persist this object in your app.
-const ACTIVE_SHOPIFY_SHOPS = {};
+const ACTIVE_SHOPIFY_SHOPS: ActiveShopifyShops = {};
 
 app.prepare().then(async () => {
   const server = new Koa();
@@ -47,8 +53,9 @@ app.prepare().then(async () => {
           accessToken,
           path: "/webhooks",
           topic: "APP_UNINSTALLED",
-          webhookHandler: async (topic, shop, body) =>
-            delete ACTIVE_SHOPIFY_SHOPS[shop],
+          webhookHandler: async (shop): Promise<void> => {
+            delete ACTIVE_SHOPIFY_SHOPS[shop];
+          },
         });
 
         if (!response.success) {
@@ -63,7 +70,9 @@ app.prepare().then(async () => {
     })
   );
 
-  const handleRequest = async (ctx) => {
+  const handleRequest = async (
+    ctx: Koa.ParameterizedContext<any, Router.IRouterParamContext<any, {}>, any>
+  ) => {
     await handle(ctx.req, ctx.res);
     ctx.respond = false;
     ctx.res.statusCode = 200;
@@ -81,7 +90,7 @@ app.prepare().then(async () => {
   router.post(
     "/graphql",
     verifyRequest({ returnHeader: true }),
-    async (ctx, next) => {
+    async (ctx) => {
       await Shopify.Utils.graphqlProxy(ctx.req, ctx.res);
     }
   );
@@ -89,7 +98,7 @@ app.prepare().then(async () => {
   router.get("(/_next/static/.*)", handleRequest); // Static content is clear
   router.get("/_next/webpack-hmr", handleRequest); // Webpack content is clear
   router.get("(.*)", async (ctx) => {
-    const shop = ctx.query.shop;
+    const shop = ctx.query.shop as string;
 
     // This shop hasn't been seen yet, go through OAuth to create a session
     if (ACTIVE_SHOPIFY_SHOPS[shop] === undefined) {
